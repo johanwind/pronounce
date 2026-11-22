@@ -323,12 +323,17 @@ function stopRec(cancel = false) {
   analyse(audio, S.rate);
 }
 async function to16k(audio, rate) {
+  // plain averaging resampler: each output sample is the mean of the input samples it covers
+  // (a box filter, enough against aliasing for speech); no audio engine needed
   if (rate === 16000) return audio;
-  const oc = new OfflineAudioContext(1, Math.ceil(audio.length * 16000 / rate), 16000);
-  const b = oc.createBuffer(1, audio.length, rate);
-  b.copyToChannel(audio, 0);
-  const src = oc.createBufferSource(); src.buffer = b; src.connect(oc.destination); src.start();
-  return new Float32Array((await oc.startRendering()).getChannelData(0));
+  const ratio = rate / 16000, n = Math.floor(audio.length / ratio), out = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const a = Math.floor(i * ratio), b = Math.min(audio.length, Math.max(a + 1, Math.floor((i + 1) * ratio)));
+    let sum = 0;
+    for (let j = a; j < b; j++) sum += audio[j];
+    out[i] = sum / (b - a);
+  }
+  return out;
 }
 async function analyse(audio, rate) {
   if (audio.length < rate * 1.0) { msg("That was very short. Press Space, read the whole paragraph, then press Space again.", true); return; }
