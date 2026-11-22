@@ -199,14 +199,24 @@ function saveBackup(entry) {
   const h = backup(); h.push(entry);
   try { localStorage.setItem("history", JSON.stringify(h.slice(-60))); } catch (e) {}
 }
-async function api(path, opts = {}, retry = true) {
+// Requests go one at a time. The hosted server is AWS Lambda, where each running copy serves
+// one request at a time: a second request while one is in flight would start (and wait for)
+// a second copy instead of sharing the first.
+let queue = Promise.resolve();
+function serial(fn) {
+  const p = queue.then(fn, fn);
+  queue = p.catch(() => {});
+  return p;
+}
+function api(path, opts = {}) { return serial(() => apiNow(path, opts)); }
+async function apiNow(path, opts = {}, retry = true) {
   opts.headers = { ...(opts.headers || {}), "X-User": UID, "X-Backup": String(backup().length) };
   const r = await fetch(API + path, opts);
   if (r.status === 409 && retry) {
     // a fresh server (restart, or a new copy of it) doesn't know us yet: send our saved history
     await fetch(API + "/api/restore", { method: "POST", headers: { "X-User": UID },
                                   body: JSON.stringify({ history: backup() }) });
-    return api(path, opts, false);
+    return apiNow(path, opts, false);
   }
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
   return r.json();
@@ -338,7 +348,7 @@ async function to16k(audio, rate) {
 async function analyse(audio, rate) {
   if (audio.length < rate * 1.0) { msg("That was very short. Press Space, read the whole paragraph, then press Space again.", true); return; }
   S.busy = true; $("recBtn").disabled = true;
-  msg('<span class="spin"></span> Listening back…');
+  msg('<span class="spin"></span> Listening back…' + (S.warm ? "" : " The scorer is still starting up after a quiet spell, so this first one takes about 20 seconds."));
   try {
     const up = await to16k(audio, rate);  // 3x smaller upload; the scorer works at 16 kHz anyway
     const d = await api(`/api/analyse?rate=16000&mode=${S.mode}`, {
@@ -400,7 +410,7 @@ async function pollCoach(id) {
   try {
     let d;
     for (let i = 0; i < 4; i++) {
-      d = await api(`/api/coach?id=${id}&wait=30`);
+      d = await apiNow(`/api/coach?id=${id}&wait=30`);  // local only (no coach when hosted); long poll, not queued
       if (!d.pending) break;
     }
     if (!S.result || S.result.id !== id) return;  // user moved on
@@ -460,16 +470,29 @@ function startPlayback(btn, starter) {
   const done = () => { p.ended = true; if (playing === p) stopPlayback(); };
   p.stop = starter(done);
 }
+const mp3Cache = {};  // hosted: text -> Promise<blob URL of its precomputed model voice>
+function hostedClip(text) {
+  return mp3Cache[text] = mp3Cache[text] || serial(() => fetch(API + `/api/tts?text=${encodeURIComponent(text)}`))
+    .then(r => { if (!r.ok) throw new Error(r.statusText); return r.blob(); })
+    .then(b => URL.createObjectURL(b))
+    .catch(e => { delete mp3Cache[text]; throw e; });
+}
 function playTTS(text, speed = 1, btn = null) {
   startPlayback(btn, (done) => {
     // hosted: one precomputed recording per text, slowed down by the browser (pitch is kept)
-    const a = new Audio(API + (S.hosted ? `/api/tts?text=${encodeURIComponent(text)}` : `/api/tts?speed=${speed}&text=${encodeURIComponent(text)}`));
-    if (S.hosted) { a.playbackRate = speed; a.onloadedmetadata = () => { a.playbackRate = speed; }; }
+    const a = new Audio();
     let stopped = false;
+    if (S.hosted) {
+      hostedClip(text).then(url => {
+        if (stopped) return;
+        a.src = url; a.playbackRate = speed; a.onloadedmetadata = () => { a.playbackRate = speed; };
+        a.play().catch(e => { if (stopped || e.name === "AbortError") return; done(); msg("Couldn't play audio: " + esc(e.message), true); });
+      }).catch(e => { if (!stopped) { done(); msg("Couldn't load audio: " + esc(e.message), true); } });
+    } else a.src = API + `/api/tts?speed=${speed}&text=${encodeURIComponent(text)}`;
     a.onended = done;
     a.onerror = () => { if (stopped) return; done(); msg("Couldn't play audio.", true); };
     // play() rejects with AbortError when paused before it starts; that's a stop, not an error
-    a.play().catch(e => { if (stopped || e.name === "AbortError") return; done(); msg("Couldn't play audio: " + esc(e.message), true); });
+    if (!S.hosted) a.play().catch(e => { if (stopped || e.name === "AbortError") return; done(); msg("Couldn't play audio: " + esc(e.message), true); });
     return () => { stopped = true; a.onended = a.onerror = null; a.pause(); a.removeAttribute("src"); a.load(); };
   });
 }
@@ -481,9 +504,10 @@ function modelWord(i, word, btn = null) {
   const t = S.wordTimes && S.wordTimes[i];
   if (!t || t[0] == null) { msg("No model audio for this word.", true); return; }
   const text = S.text;
-  clipCache[text] = clipCache[text] || fetch(API + `/api/tts?text=${encodeURIComponent(text)}`)
-    .then(r => { if (!r.ok) throw new Error(r.statusText); return r.arrayBuffer(); })
-    .then(b => new AudioContext().decodeAudioData(b));
+  clipCache[text] = clipCache[text] || hostedClip(text)
+    .then(url => fetch(url)).then(r => r.arrayBuffer())
+    .then(b => new AudioContext().decodeAudioData(b))
+    .catch(e => { delete clipCache[text]; throw e; });
   startPlayback(btn, (done) => {
     let ctx = null, src = null, stopped = false;
     const close = () => { if (ctx && ctx.state !== "closed") ctx.close().catch(() => {}); };
@@ -643,8 +667,17 @@ document.addEventListener("keydown", (e) => {
   if (act) { e.preventDefault(); act(); }
 });
 document.addEventListener("keyup", (e) => { if (e.code === "Space" && !(e.target.closest && e.target.closest("textarea, input"))) e.preventDefault(); });
-refreshState();
-loadParagraph("random");
+// Start-up, one request at a time (see serial): the passage first, so there is something to
+// read at once, then the progress panel, then keep the server busy until its model is loaded.
+// After a quiet spell the hosted server starts from cold (~20 s to load the model); this way
+// that happens while you read, not after you press stop.
+async function warmUp() {
+  for (let i = 0; i < 60 && !S.warm; i++) {
+    try { const d = await api("/api/warm?wait=3"); if (d.error) return; S.warm = d.ready; }
+    catch (e) { await new Promise(r => setTimeout(r, 2000)); }
+  }
+}
+loadParagraph("random").then(refreshState).then(warmUp);
 </script>
 </body>
 </html>
