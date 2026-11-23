@@ -212,6 +212,7 @@ function api(path, opts = {}) { return serial(() => apiNow(path, opts)); }
 async function apiNow(path, opts = {}, retry = true) {
   opts.headers = { ...(opts.headers || {}), "X-User": UID, "X-Backup": String(backup().length) };
   const r = await fetch(API + path, opts);
+  if (r.status === 409 && !(await r.clone().json().catch(() => ({}))).restore) return { resend: true };
   if (r.status === 409 && retry) {
     // a fresh server (restart, or a new copy of it) doesn't know us yet: send our saved history
     await fetch(API + "/api/restore", { method: "POST", headers: { "X-User": UID },
@@ -294,9 +295,11 @@ async function startRec() {
     const src = ctx.createMediaStreamSource(stream);
     const node = new AudioWorkletNode(ctx, "cap");
     S.chunks = []; S.rate = ctx.sampleRate;
+    S.stream = S.hosted ? streamStart(ctx.sampleRate) : null;
     let level = 0;
     node.port.onmessage = (e) => {
       S.chunks.push(e.data);
+      if (S.stream) S.stream.push(e.data);
       let m = 0; for (const v of e.data) m = Math.max(m, Math.abs(v));
       level = Math.max(m, level * 0.9);
     };
@@ -324,13 +327,61 @@ function stopRec(cancel = false) {
   $("card").classList.remove("rec");
   $("recBtn").className = "primary"; $("recBtn").innerHTML = "● Read it<kbd>Space</kbd>";
   $("recInfo").classList.add("hidden"); $("meter").classList.add("hidden");
-  if (cancel) { msg("Recording discarded."); return; }
+  if (cancel) { S.stream = null; msg("Recording discarded."); return; }
   let n = 0; for (const c of S.chunks) n += c.length;
   const audio = new Float32Array(n); let o = 0;
   for (const c of S.chunks) { audio.set(c, o); o += c.length; }
   S.audio = audio;
   $("mineBtn").classList.remove("hidden");
   analyse(audio, S.rate);
+}
+// The same box-filter conversion as to16k, done as the audio arrives (output sample i depends only
+// on input samples before (i+1)*ratio, so the result is identical to converting it all at the end).
+class Down16k {
+  constructor(rate) { this.ratio = rate / 16000; this.raw = new Float32Array(rate * 30); this.n = 0; this.done = 0; }
+  push(chunk) {
+    if (this.n + chunk.length > this.raw.length) {
+      const bigger = new Float32Array(Math.max(this.raw.length * 2, this.n + chunk.length));
+      bigger.set(this.raw.subarray(0, this.n)); this.raw = bigger;
+    }
+    this.raw.set(chunk, this.n); this.n += chunk.length;
+    const upto = Math.floor(this.n / this.ratio), out = new Float32Array(Math.max(0, upto - this.done));
+    for (let i = this.done; i < upto; i++) {
+      const a = Math.floor(i * this.ratio), b = Math.max(a + 1, Math.floor((i + 1) * this.ratio));
+      let sum = 0;
+      for (let j = a; j < b; j++) sum += this.raw[j];
+      out[i - this.done] = sum / (b - a);
+    }
+    this.done = upto;
+    return out;
+  }
+}
+// Hosted: send the recording to the server in pieces while it is being made, so the model has
+// mostly run by the time you press stop. Pieces go through the request queue like everything else.
+function streamStart(rate) {
+  const st = { rid: Math.random().toString(16).slice(2, 14), down: new Down16k(rate), parts: [], len: 0,
+               sent: 0, ok: true };
+  st.flush = () => {
+    if (!st.ok || st.sending) return;
+    const n = st.len - st.sent;
+    if (n < 16000 * 2) return;  // every 2 s of audio; the rest goes with the analyse request
+    const body = st.audio().slice(st.sent, st.len), offset = st.sent;
+    st.sending = true;
+    // st.sent is updated inside the queued job, so a later queued job (the final analyse) sees it
+    serial(async () => {
+      try {
+        const d = await apiNow(`/api/piece?rid=${st.rid}&offset=${offset}`, { method: "POST", body: body.buffer });
+        if (d.held === offset + body.length) st.sent = d.held; else st.ok = false;
+      } catch (e) { st.ok = false; }
+      finally { st.sending = false; }
+    });
+  };
+  st.push = (chunk) => { const o = st.down.push(chunk); if (o.length) { st.parts.push(o); st.len += o.length; } st.flush(); };
+  st.audio = () => {
+    if (st.parts.length > 1) { const all = new Float32Array(st.len); let o = 0; for (const p of st.parts) { all.set(p, o); o += p.length; } st.parts = [all]; }
+    return st.parts[0] || new Float32Array(0);
+  };
+  return st;
 }
 async function to16k(audio, rate) {
   // plain averaging resampler: each output sample is the mean of the input samples it covers
@@ -350,9 +401,23 @@ async function analyse(audio, rate) {
   S.busy = true; $("recBtn").disabled = true;
   msg('<span class="spin"></span> Listening back…' + (S.warm ? "" : " The scorer is still starting up after a quiet spell, so this first one takes about 20 seconds."));
   try {
-    const up = await to16k(audio, rate);  // 3x smaller upload; the scorer works at 16 kHz anyway
-    const d = await api(`/api/analyse?rate=16000&mode=${S.mode}`, {
-      method: "POST", headers: { "X-Text": encodeURIComponent(S.text) }, body: up.buffer });
+    const st = S.stream; S.stream = null;
+    let d = null;
+    if (st && st.ok) {
+      // the server has the start of the recording (and has run the model on it): send the rest.
+      // Queued behind any piece still in flight, so st.sent is final when this runs.
+      d = await serial(async () => {
+        if (!st.ok) return { resend: true };
+        const all = st.audio();
+        return apiNow(`/api/analyse?rate=16000&mode=${S.mode}&rid=${st.rid}&offset=${st.sent}`, {
+          method: "POST", headers: { "X-Text": encodeURIComponent(S.text) }, body: all.slice(st.sent).buffer });
+      });
+    }
+    if (!d || d.resend) {
+      const up = st ? st.audio() : await to16k(audio, rate);  // 3x smaller upload; the scorer works at 16 kHz anyway
+      d = await api(`/api/analyse?rate=16000&mode=${S.mode}`, {
+        method: "POST", headers: { "X-Text": encodeURIComponent(S.text) }, body: up.buffer });
+    }
     if (d.error) { msg(esc(d.error), true); return; }
     msg("");
     showResult(d);
@@ -439,7 +504,9 @@ $("para").addEventListener("click", (ev) => {
     return `<span class="ph ${bad ? "bad" : ""}">${esc(p.phone)}<small>${sub}</small></span>`;
   }).join("");
   const pop = $("pop");
-  pop.innerHTML = `<div><b>${esc(w.word)}</b> <span class="sub">${w.score === null ? "not scored" : Math.round(w.score * 100) + "%"}</span></div>
+  // Norwegian: the spelling that explained the audio better (a misreading if it's a different word)
+  const as = w.heard_as ? `<div class="sub">${w.slip ? "read as" : "sounded like"} <b>${esc(w.heard_as)}</b></div>` : "";
+  pop.innerHTML = `<div><b>${esc(w.word)}</b> <span class="sub">${w.score === null ? "not scored" : Math.round(w.score * 100) + "%"}</span></div>${as}
     <div>${phs || '<span class="sub">no sounds</span>'}</div>
     <div class="row"><button id="pModel">▶ Model<kbd>M</kbd></button><button id="pMe" ${S.audio && w.start != null ? "" : "disabled"}>▶ You<kbd>Y</kbd></button></div>`;
   const r = el.getBoundingClientRect();
