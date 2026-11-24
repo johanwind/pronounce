@@ -267,7 +267,49 @@ const STRINGS = {
     sounds: "lyder", nextLoading: "Henter neste tekst …",
   },
 };
-STRINGS.el = { ...STRINGS.en, title: "Διάβασε δυνατά" };  // Greek (local only): English labels for now
+STRINGS.el = {
+  title: "Διάβασε δυνατά",
+  tagline: "Διάβασε το κείμενο δυνατά, δες ποιες λέξεις δεν ακούστηκαν καθαρά και πάρε τρία πράγματα για εξάσκηση.",
+  hostedNote: "Οι ηχογραφήσεις σου αξιολογούνται και μετά διαγράφονται· τίποτα δεν αποθηκεύεται στον διακομιστή. Η πρόοδός σου μένει σε αυτόν τον φυλλομετρητή.",
+  loading: "Φόρτωση…",
+  customPlaceholder: "Επικόλλησε ή γράψε ένα κείμενο (30–150 λέξεις είναι ιδανικά)",
+  useCustom: "Χρήση αυτού του κειμένου", cancel: "Ακύρωση",
+  recBtn: "● Διάβασε<kbd>Space</kbd>", doneBtn: "■ Τέλος<kbd>Space</kbd>",
+  hearBtn: "▶ Άκουσέ το<kbd>H</kbd>", mineBtn: "▶ Η ανάγνωσή μου<kbd>P</kbd>", mineTitle: "Άκου την τελευταία σου ανάγνωση",
+  newBtn: "Νέο κείμενο<kbd>⇧N</kbd>", customBtn: "Δικό μου κείμενο<kbd>T</kbd>",
+  againBtn: "↻ Ξανά<kbd>A</kbd>", nextBtn: "Επόμενο κείμενο →<kbd>N</kbd>",
+  focusTitle: "Εξάσκηση σε αυτά", fromStats: "από τα στατιστικά σου",
+  wordHint: "Πάτησε μια σημειωμένη λέξη (ή πήγαινε από τη μία στην άλλη με <kbd>←</kbd> <kbd>→</kbd>) για να δεις πώς ακούστηκε· το <kbd>M</kbd> παίζει τη φωνή-πρότυπο, το <kbd>Y</kbd> τη δική σου.",
+  progress: "Πρόοδος", allAreas: "Όλοι οι ήχοι (τελευταίες αναγνώσεις)",
+  shortcuts: "Συντομεύσεις πληκτρολογίου", spaceKey: "Space",
+  kSpace: "αρχή / τέλος ανάγνωσης", kEsc: "απόρριψη ηχογράφησης, διακοπή ήχου, κλείσιμο παραθύρων",
+  kH: "άκου το κείμενο (πάτησε ξανά για διακοπή)", kP: "άκου την ανάγνωσή σου",
+  kArrows: "προηγούμενη / επόμενη ασαφής λέξη", kMY: "επιλεγμένη λέξη: φωνή-πρότυπο / η δική σου εκδοχή",
+  kB: "επιλεγμένη λέξη: πρότυπο, μετά εσύ", kA: "διάβασε το ίδιο κείμενο ξανά",
+  kN: "επόμενο κείμενο (διαλεγμένο για όσα εξασκείς) / τυχαίο κείμενο", kT: "χρησιμοποίησε δικό σου κείμενο", kHelp: "εμφάνιση / απόκρυψη αυτής της λίστας",
+  loadFailed: "Δεν φορτώθηκε κείμενο: ",
+  micFailed: (e) => `Το μικρόφωνο δεν είναι διαθέσιμο: ${e}. Επίτρεψε στη σελίδα να χρησιμοποιεί το μικρόφωνο και δοκίμασε ξανά.`,
+  discarded: "Η ηχογράφηση απορρίφθηκε.",
+  tooShort: "Ήταν πολύ σύντομο. Πάτησε Space, διάβασε όλο το κείμενο και πάτησε ξανά Space.",
+  listening: "Ακούω…",
+  coldStart: " Η αξιολόγηση ξεκινά ξανά μετά από ώρα αδράνειας, οπότε η πρώτη μπορεί να πάρει έως μισό λεπτό.",
+  failed: "Η αξιολόγηση απέτυχε: ",
+  err: { silent: "Δεν ακούστηκε τίποτα. Έλεγξε το μικρόφωνο.",
+         short: "Η ηχογράφηση είναι πολύ πιο σύντομη από το κείμενο. Διάβασε όλο το κείμενο και μετά πάτησε Space." },
+  clarity: "καθαρότητα", vsLast: " σε σχέση με την προηγούμενη", wpm: "λέξεις / λεπτό · φωνή-πρότυπο ", wordsClear: "καθαρές λέξεις",
+  hesitations: "διστακτικές παύσεις μέσα στην πρόταση (‖)",
+  incomplete: "Φαίνεται ότι η ηχογράφηση σταμάτησε πριν από το τέλος του κειμένου, οπότε οι τελευταίες λέξεις μπορεί να βαθμολογήθηκαν άδικα.",
+  nothing: { area: "Τίποτα δεν ξεχωρίζει", evidence: "Όλοι οι ήχοι πήραν καλή βαθμολογία.", tip: "Δοκίμασε να διαβάσεις λίγο πιο γρήγορα, κρατώντας κάθε λέξη καθαρή." },
+  hearIt: "Άκουσέ το",
+  askingCoach: "ρωτάω τον προπονητή", coach: "προπονητής (Haiku)", coachWrote: "Το επόμενο κείμενο γράφτηκε για όσα εξασκείς.",
+  coachDown: "Ο προπονητής δεν είναι διαθέσιμος: ", coachDownShort: " · ο προπονητής δεν είναι διαθέσιμος", timedOut: "λήξη χρόνου",
+  heard: "ακούστηκε", readAs: "διαβάστηκε ως", soundedLike: "ακούστηκε σαν", notScored: "χωρίς βαθμολογία", noSounds: "χωρίς ήχους",
+  model: "▶ Πρότυπο<kbd>M</kbd>", you: "▶ Εσύ<kbd>Y</kbd>", stop: "■ Διακοπή",
+  playFailed: "Δεν ήταν δυνατή η αναπαραγωγή.", loadAudioFailed: "Δεν φορτώθηκε ο ήχος: ", noWordAudio: "Δεν υπάρχει ήχος-πρότυπο για αυτή τη λέξη.",
+  noHistory: "Η καθαρότητα και η ταχύτητά σου με τον καιρό θα εμφανιστούν εδώ μετά από μερικές αναγνώσεις.",
+  legend: (c, w) => `καθαρότητα (40–100%) &nbsp; <span>┅</span> λέξεις/λεπτό · τελευταία: ${c}% με ${w} λέξεις/λεπτό`,
+  sounds: "ήχοι", nextLoading: "Φορτώνει το επόμενο κείμενο…",
+};
 const T = STRINGS[LANG] || STRINGS.en;
 function applyStrings() {
   document.documentElement.lang = LANG;
@@ -293,7 +335,7 @@ if (!/^[0-9a-f]{32}$/.test(UID)) {
   UID = [...crypto.getRandomValues(new Uint8Array(16))].map(b => b.toString(16).padStart(2, "0")).join("");
   try { localStorage.setItem("uid", UID); } catch (e) {}
 }
-// The English and Norwegian pages share one origin (johanwind.github.io), so each language keeps
+// The English, Norwegian and Greek pages share one origin (johanwind.github.io), so each language keeps
 // its readings under its own key. Before that, both used "history": the Norwegian page takes
 // its own readings out of it once (Norwegian passages all contain æ, ø or å).
 const HISTORY_KEY = LANG === "en" ? "history" : "history_" + LANG;
